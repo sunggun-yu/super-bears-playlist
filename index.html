@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Super Bears</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .audio-player {
+            margin-bottom: 20px;
+            border: 1px solid #ddd;
+            padding: 15px;
+            border-radius: 5px;
+        }
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .play-pause-btn, .stop-fade-btn, .gear-btn {
+            background-color: #ff0000;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+        .stop-fade-btn {
+            background-color: #1a1a1a;
+        }
+        .gear-btn {
+            background-color: #4CAF50;
+        }
+        .stop-fade-btn:disabled {
+            background-color: #666;
+            cursor: not-allowed;
+        }
+        .progress-container {
+            position: relative;
+            width: 100%;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 5px;
+            background-color: #ddd;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        .progress {
+            height: 100%;
+            background-color: #ff0000;
+            width: 0%;
+        }
+        .time-display {
+            font-family: monospace;
+            position: absolute;
+            right: 0;
+            top: -20px;
+        }
+        .playlist-container {
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        #playlist {
+            list-style-type: none;
+            padding: 0;
+            margin: 0;
+        }
+        #playlist li {
+            display: flex;
+            align-items: center;
+            padding: 10px;
+            border-bottom: 1px solid #ddd;
+            background-color: #f9f9f9;
+            transition: background-color 0.3s;
+        }
+        #playlist li:last-child {
+            border-bottom: none;
+        }
+        #playlist li:hover {
+            background-color: #f0f0f0;
+        }
+        #playlist li.active {
+            background-color: #e0e0e0;
+            font-weight: bold;
+        }
+        #playlist li.dragging {
+            opacity: 0.5;
+            background-color: #d4d4d4;
+        }
+        .drag-handle {
+            cursor: move;
+            padding-right: 10px;
+            color: #888;
+        }
+        .item-number {
+            margin-right: 10px;
+            color: #888;
+            font-weight: bold;
+        }
+        .remove-btn {
+            margin-left: auto;
+            background-color: #ff4d4d;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            cursor: pointer;
+            border-radius: 3px;
+        }
+        #file-input {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>Super Bears Playlist</h1>
+
+    <div class="audio-player">
+        <audio id="audio-element"></audio>
+        <div class="controls">
+            <button class="play-pause-btn">Play</button>
+            <button class="stop-fade-btn" disabled>Stop (Fade)</button>
+            <button class="gear-btn">Add Files</button>
+            <input type="file" id="file-input" accept="audio/mp3" multiple>
+        </div>
+        <div class="progress-container">
+            <div class="progress-bar"><div class="progress"></div></div>
+            <span class="time-display">0:00 / 0:00</span>
+        </div>
+    </div>
+
+    <div class="playlist-container">
+        <ul id="playlist"></ul>
+    </div>
+
+    <script>
+        let audioElement;
+        let currentTrack = 0;
+        let playlist = [];
+        let fadeInterval;
+        let isPlaying = false;
+        let isTrackEnding = false;
+
+        document.addEventListener('DOMContentLoaded', function() {
+            initializePlayer();
+        });
+
+        function initializePlayer() {
+            audioElement = document.getElementById('audio-element');
+            audioElement.addEventListener('timeupdate', updateProgress);
+            audioElement.addEventListener('ended', handleTrackEnd);
+            updatePlaylistDOM();
+        }
+
+        function addFiles(files) {
+            for (let file of files) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const audio = new Audio(e.target.result);
+                    audio.onloadedmetadata = function() {
+                        playlist.push({
+                            title: file.name,
+                            file: e.target.result,
+                            start: 0,
+                            stop: audio.duration
+                        });
+                        updatePlaylistDOM();
+                    };
+                };
+                reader.readAsDataURL(file);
+            }
+        }
+
+        function updatePlaylistDOM() {
+            const playlistElement = document.getElementById('playlist');
+            playlistElement.innerHTML = '';
+            playlist.forEach((item, index) => {
+                const li = createPlaylistItem(item, index);
+                li.dataset.index = index;
+                playlistElement.appendChild(li);
+            });
+            updateActiveTrack();
+        }
+
+        function createPlaylistItem(item, index) {
+            const li = document.createElement('li');
+            
+            const dragHandle = document.createElement('span');
+            dragHandle.className = 'drag-handle';
+            dragHandle.innerHTML = '&#9776;'; // Hamburger icon
+            li.appendChild(dragHandle);
+
+            const itemNumber = document.createElement('span');
+            itemNumber.className = 'item-number';
+            itemNumber.textContent = `${index + 1}.`;
+            li.appendChild(itemNumber);
+
+            const itemContent = document.createElement('span');
+            let cleanTitle = item.title.replace(/\.mp3$/, '');
+            itemContent.textContent = cleanTitle;
+            li.appendChild(itemContent);
+
+            const removeButton = document.createElement('button');
+            removeButton.className = 'remove-btn';
+            removeButton.textContent = 'Remove';
+            removeButton.onclick = (e) => {
+                e.stopPropagation();
+                if (confirm(`Are you sure you want to remove "${cleanTitle}" from the playlist?`)) {
+                    removeTrack(index);
+                }
+            };
+            li.appendChild(removeButton);
+
+            li.onclick = (e) => {
+                if (e.target !== dragHandle && e.target !== removeButton) {
+                    selectTrack(index);
+                }
+            };
+            li.draggable = true;
+            li.addEventListener('dragstart', dragStart);
+            li.addEventListener('dragover', dragOver);
+            li.addEventListener('drop', drop);
+            li.addEventListener('dragenter', dragEnter);
+            li.addEventListener('dragleave', dragLeave);
+            return li;
+        }
+
+        function removeTrack(index) {
+            playlist.splice(index, 1);
+            if (index < currentTrack) {
+                currentTrack--;
+            } else if (index === currentTrack) {
+                if (isPlaying) {
+                    audioElement.pause();
+                    isPlaying = false;
+                }
+                if (playlist.length > 0) {
+                    currentTrack = currentTrack % playlist.length;
+                    loadTrack(currentTrack);
+                } else {
+                    currentTrack = 0;
+                    audioElement.src = '';
+                }
+            }
+            updatePlaylistDOM();
+            updatePlayPauseButton();
+        }
+
+        function dragStart(e) {
+            e.dataTransfer.setData('text/plain', e.target.dataset.index);
+            e.target.classList.add('dragging');
+        }
+
+        function dragOver(e) {
+            e.preventDefault();
+        }
+
+        function dragEnter(e) {
+            e.target.classList.add('drag-over');
+        }
+
+        function dragLeave(e) {
+            e.target.classList.remove('drag-over');
+        }
+
+        function drop(e) {
+            e.preventDefault();
+            const fromIndex = parseInt(e.dataTransfer.getData('text/plain'));
+            const toIndex = Array.from(e.target.closest('ul').children).indexOf(e.target.closest('li'));
+            
+            if (fromIndex !== toIndex) {
+                const itemToMove = playlist[fromIndex];
+                playlist.splice(fromIndex, 1);
+                playlist.splice(toIndex, 0, itemToMove);
+
+                if (currentTrack === fromIndex) {
+                    currentTrack = toIndex;
+                } else if (fromIndex < currentTrack && toIndex >= currentTrack) {
+                    currentTrack--;
+                } else if (fromIndex > currentTrack && toIndex <= currentTrack) {
+                    currentTrack++;
+                }
+
+                updatePlaylistDOM();
+            }
+
+            e.target.classList.remove('drag-over');
+        }
+
+        function togglePlayPause() {
+            if (playlist.length === 0) return;
+            
+            if (isPlaying) {
+                audioElement.pause();
+            } else {
+                audioElement.play();
+            }
+            isPlaying = !isPlaying;
+            updatePlayPauseButton();
+        }
+
+        function stopWithFadeOut() {
+            if (!isPlaying) return;
+            
+            clearInterval(fadeInterval);
+            let volume = audioElement.volume;
+            let fadeStep = volume / 20; // Fade out over 1 second (50ms * 20)
+            
+            fadeInterval = setInterval(() => {
+                volume = Math.max(0, volume - fadeStep);
+                audioElement.volume = volume;
+                
+                if (volume <= 0) {
+                    clearInterval(fadeInterval);
+                    audioElement.pause();
+                    audioElement.currentTime = playlist[currentTrack].start;
+                    audioElement.volume = 1; // Reset volume for next play
+                    isPlaying = false;
+                    updatePlayPauseButton();
+                    updateProgress();
+                    focusNextTrack();
+                }
+            }, 50);
+        }
+
+        function handleTrackEnd() {
+            isTrackEnding = true;
+            isPlaying = false;
+            updatePlayPauseButton();
+            focusNextTrack();
+            setTimeout(() => {
+                isTrackEnding = false;
+            }, 100);
+        }
+
+        function focusNextTrack() {
+            const nextTrack = (currentTrack + 1) % playlist.length;
+            currentTrack = nextTrack;
+            loadTrack(currentTrack);
+            updateActiveTrack();
+        }
+
+        function selectTrack(index) {
+            if (index !== currentTrack) {
+                currentTrack = index;
+                loadTrack(currentTrack);
+                updateActiveTrack();
+                isPlaying = false;
+                updatePlayPauseButton();
+            }
+        }
+
+        function loadTrack(index) {
+            const track = playlist[index];
+            audioElement.src = track.file;
+            audioElement.currentTime = track.start;
+            updateProgress();
+        }
+
+        function updateActiveTrack() {
+            document.querySelectorAll('#playlist li').forEach((li, index) => {
+                li.classList.toggle('active', index === currentTrack);
+            });
+            const activeTrack = document.querySelector('#playlist li.active');
+            if (activeTrack) {
+                activeTrack.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+        }
+
+        function updateProgress() {
+            if (playlist.length === 0) return;
+            
+            const currentTime = audioElement.currentTime;
+            const startTime = playlist[currentTrack].start;
+            const stopTime = playlist[currentTrack].stop;
+            const duration = stopTime - startTime;
+            const progress = ((currentTime - startTime) / duration) * 100;
+            
+            document.querySelector('.progress').style.width = `${progress}%`;
+            document.querySelector('.time-display').textContent = `${formatTime(currentTime - startTime)} / ${formatTime(duration)}`;
+
+            if (currentTime >= stopTime) {
+                handleTrackEnd();
+            }
+        }
+
+        function formatTime(time) {
+            const minutes = Math.floor(time / 60);
+            const seconds = Math.floor(time % 60);
+            return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        }
+
+        function seek(event) {
+            if (playlist.length === 0) return;
+            
+            const progressBar = event.currentTarget;
+            const clickPosition = (event.clientX - progressBar.getBoundingClientRect().left) / progressBar.offsetWidth;
+            const startTime = playlist[currentTrack].start;
+            const stopTime = playlist[currentTrack].stop;
+            const duration = stopTime - startTime;
+            const seekTime = startTime + (clickPosition * duration);
+            audioElement.currentTime = seekTime;
+            updateProgress();
+        }
+
+        function updatePlayPauseButton() {
+            const button = document.querySelector('.play-pause-btn');
+            button.textContent = isPlaying ? 'Pause' : 'Play';
+            document.querySelector('.stop-fade-btn').disabled = !isPlaying;
+        }
+
+        // Set up event listeners
+        document.querySelector('.play-pause-btn').addEventListener('click', togglePlayPause);
+        document.querySelector('.stop-fade-btn').addEventListener('click', stopWithFadeOut);
+        document.querySelector('.progress-bar').addEventListener('click', seek);
+        document.querySelector('.gear-btn').addEventListener('click', () => document.getElementById('file-input').click());
+        document.getElementById('file-input').addEventListener('change', (e) => addFiles(e.target.files));
+    </script>
+</body>
+</html>
