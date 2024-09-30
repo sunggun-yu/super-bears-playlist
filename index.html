@@ -161,22 +161,33 @@
         }
 
         function addFiles(files) {
-            for (let file of files) {
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    const audio = new Audio(e.target.result);
-                    audio.onloadedmetadata = function() {
-                        playlist.push({
-                            title: file.name,
-                            file: e.target.result,
-                            start: 0,
-                            stop: audio.duration
-                        });
-                        updatePlaylistDOM();
+            const promises = Array.from(files).map(file => {
+                return new Promise((resolve) => {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        const audio = new Audio(e.target.result);
+                        audio.onloadedmetadata = function() {
+                            resolve({
+                                title: file.name,
+                                file: e.target.result,
+                                start: 0,
+                                stop: audio.duration
+                            });
+                        };
                     };
-                };
-                reader.readAsDataURL(file);
-            }
+                    reader.readAsDataURL(file);
+                });
+            });
+
+            Promise.all(promises).then(newTracks => {
+                playlist = [...playlist, ...newTracks];
+                updatePlaylistDOM();
+                if (playlist.length === newTracks.length) {
+                    // This means these are the first tracks added
+                    loadTrack(0);
+                    updateActiveTrack();
+                }
+            });
         }
 
         function updatePlaylistDOM() {
